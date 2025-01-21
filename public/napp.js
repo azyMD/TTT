@@ -17,6 +17,7 @@
 
   let currentGameId = null;
   let currentGameState = null;
+  let currentPlayerSymbol = null; // Track the player's symbol ('X' or 'O')
 
   // Utility to log errors
   function logError(error) {
@@ -69,8 +70,16 @@
 
   // Start Game
   socket.on("startGame", (gameState) => {
+    console.log("Game started:", gameState); // Debugging
     currentGameId = gameState.gameId;
     currentGameState = gameState;
+
+    // Determine the player's symbol ('X' or 'O')
+    const player = gameState.players.find((p) => p.socketId === socket.id);
+    currentPlayerSymbol = player ? player.symbol : null;
+
+    console.log("Your symbol:", currentPlayerSymbol); // Debugging
+
     lobbyContainer.style.display = "none";
     gameContainer.style.display = "block";
     renderGameState(gameState);
@@ -87,10 +96,18 @@
   function renderGameState(game) {
     console.log("Rendering game state:", game); // Debugging
 
-    // Clear the board
-    boardElement.innerHTML = "";
+    // Update game info
+    if (game.winner) {
+      gameInfo.textContent =
+        game.winner === "draw" ? "It's a draw!" : `${game.winner} wins!`;
+      replayBtn.style.display = "block";
+    } else {
+      gameInfo.textContent = `Turn: ${game.currentPlayer}`;
+      replayBtn.style.display = "none";
+    }
 
-    // Render each cell on the board
+    // Render the board
+    boardElement.innerHTML = ""; // Clear the board
     game.board.forEach((symbol, index) => {
       const cell = document.createElement("div");
       cell.classList.add("cell");
@@ -100,23 +117,26 @@
       cell.textContent = symbol || ""; // Show 'X', 'O', or leave blank
       if (symbol) {
         cell.classList.add("taken"); // Mark taken cells
-      } else if (!game.winner) {
-        // Add click event listener for empty cells only if game is ongoing
-        cell.addEventListener("click", () => makeMove(index));
+      } else if (!game.winner && game.currentPlayer === currentPlayerSymbol) {
+        // Add click event listener for empty cells only if it's this player's turn
+        cell.addEventListener("click", () => handleCellClick(index, cell));
       }
 
       boardElement.appendChild(cell);
     });
+  }
 
-    // Update game information
-    if (game.winner) {
-      gameInfo.textContent =
-        game.winner === "draw" ? "It's a draw!" : `${game.winner} wins!`;
-      replayBtn.style.display = "block";
-    } else {
-      gameInfo.textContent = `Turn: ${game.currentPlayer}`;
-      replayBtn.style.display = "none";
-    }
+  // Handle Cell Click
+  function handleCellClick(cellIndex, cell) {
+    console.log("Player clicked cell:", cellIndex); // Debugging
+
+    // Optimistically update the board immediately
+    cell.textContent = currentPlayerSymbol;
+    cell.classList.add("taken");
+    cell.removeEventListener("click", () => handleCellClick(cellIndex, cell)); // Prevent double-clicks
+
+    // Send the move to the server
+    makeMove(cellIndex);
   }
 
   // Make a Move
