@@ -11,7 +11,7 @@ const io = new Server(server);
 // Serve static files
 app.use(express.static("public"));
 
-// Error logging utility
+// Utility function to log errors
 const logError = (error) => {
   const errorLogPath = path.join(__dirname, "error.log");
   const errorMessage = `[${new Date().toISOString()}] ${error.stack || error}\n`;
@@ -19,8 +19,8 @@ const logError = (error) => {
 };
 
 // Ongoing lobby and game states
-const lobbyUsers = new Map(); // Stores players in the lobby
-const ongoingGames = new Map(); // Stores active games
+const lobbyUsers = new Map();
+const ongoingGames = new Map();
 
 // Utility functions
 const generateGameId = () => `game_${Math.random().toString(36).substr(2, 8)}`;
@@ -45,7 +45,9 @@ function checkWinner(board) {
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
-  // Handle lobby join
+  // ---------------------
+  // Handle Lobby Join
+  // ---------------------
   socket.on("joinLobby", (username) => {
     try {
       lobbyUsers.set(socket.id, { username, inGame: false });
@@ -66,7 +68,9 @@ io.on("connection", (socket) => {
     io.emit("lobbyData", users);
   };
 
-  // Handle challenges
+  // ---------------------
+  // Handle Challenges
+  // ---------------------
   socket.on("challengeUser", (opponentSocketId) => {
     try {
       const challenger = lobbyUsers.get(socket.id);
@@ -120,7 +124,9 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Handle moves
+  // ---------------------
+  // Handle Player Moves
+  // ---------------------
   socket.on("playerMove", ({ gameId, cellIndex }) => {
     try {
       console.log(`Move received: gameId=${gameId}, cellIndex=${cellIndex}, playerId=${socket.id}`);
@@ -167,7 +173,9 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Handle disconnections
+  // ---------------------
+  // Handle Player Disconnection
+  // ---------------------
   socket.on("disconnect", () => {
     try {
       console.log("User disconnected:", socket.id);
