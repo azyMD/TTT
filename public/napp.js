@@ -17,7 +17,7 @@
 
   let currentGameId = null;
   let currentGameState = null;
-  let currentPlayerSymbol = null; // Track the player's symbol ('X' or 'O')
+  let currentPlayerSymbol = null; // 'X' or 'O'
 
   // Utility to log errors
   function logError(error) {
@@ -35,21 +35,26 @@
       return;
     }
     socket.emit("joinLobby", username);
+
     loginContainer.style.display = "none";
     lobbyContainer.style.display = "block";
   });
 
-  // Play with Bot
+  // (Optional) Play with Bot
   playBotBtn.addEventListener("click", () => {
     socket.emit("playWithBot");
   });
 
+  // ---------------------
   // Render Lobby
+  // ---------------------
   socket.on("lobbyData", (users) => {
     usersList.innerHTML = "";
     users.forEach((user) => {
       const li = document.createElement("li");
       li.textContent = `${user.username} ${user.inGame ? "(in-game)" : ""}`;
+
+      // Show challenge button if user is not in game and is not yourself
       if (!user.inGame && user.socketId !== socket.id) {
         const challengeBtn = document.createElement("button");
         challengeBtn.textContent = "Challenge";
@@ -62,100 +67,116 @@
     });
   });
 
-  // Handle Challenge Requests
+  // ---------------------
+  // Handle Challenge Request
+  // ---------------------
   socket.on("challengeRequest", ({ from, fromUsername }) => {
     const accept = confirm(`${fromUsername} challenged you! Accept?`);
     socket.emit("challengeResponse", { from, accepted: accept });
   });
 
+  socket.on("challengeDeclined", ({ reason }) => {
+    alert(reason);
+  });
+
+  // ---------------------
   // Start Game
+  // ---------------------
   socket.on("startGame", (gameState) => {
-    console.log("Game started:", gameState); // Debugging
+    console.log("Game started:", gameState);
     currentGameId = gameState.gameId;
     currentGameState = gameState;
 
-    // Determine the player's symbol ('X' or 'O')
+    // Figure out which symbol this client is
     const player = gameState.players.find((p) => p.socketId === socket.id);
     currentPlayerSymbol = player ? player.symbol : null;
 
-    console.log("Your symbol:", currentPlayerSymbol); // Debugging
-
     lobbyContainer.style.display = "none";
     gameContainer.style.display = "block";
+
     renderGameState(gameState);
   });
 
+  // ---------------------
   // Update Game
+  // ---------------------
   socket.on("updateGame", (gameState) => {
-    console.log("Updated game state received from server:", gameState); // Debugging
+    console.log("Updated game state received:", gameState);
     currentGameState = gameState;
     renderGameState(gameState);
   });
 
+  // ---------------------
   // Render Game State
+  // ---------------------
   function renderGameState(game) {
-    console.log("Rendering game state:", game); // Debugging
-
-    // Update game info
+    // Update info text
     if (game.winner) {
-      gameInfo.textContent =
-        game.winner === "draw" ? "It's a draw!" : `${game.winner} wins!`;
+      if (game.winner === "draw") {
+        gameInfo.textContent = "It's a draw!";
+      } else if (game.winner === "abandoned") {
+        gameInfo.textContent = "Your opponent left the game.";
+      } else {
+        gameInfo.textContent = `${game.winner} wins!`;
+      }
       replayBtn.style.display = "block";
     } else {
       gameInfo.textContent = `Turn: ${game.currentPlayer}`;
       replayBtn.style.display = "none";
     }
 
-    // Render the board
-    boardElement.innerHTML = ""; // Clear the board
+    // Clear current board
+    boardElement.innerHTML = "";
+
+    // Render cells
     game.board.forEach((symbol, index) => {
       const cell = document.createElement("div");
       cell.classList.add("cell");
       cell.dataset.index = index;
+      cell.textContent = symbol || "";
 
-      // Set cell content and state
-      cell.textContent = symbol || ""; // Show 'X', 'O', or leave blank
       if (symbol) {
-        cell.classList.add("taken"); // Mark taken cells
+        cell.classList.add("taken");
       } else if (!game.winner && game.currentPlayer === currentPlayerSymbol) {
-        // Add click event listener for empty cells only if it's this player's turn
-        cell.addEventListener("click", () => handleCellClick(index, cell));
+        // If it's my turn and cell is empty, add a click handler
+        cell.addEventListener("click", onCellClick);
       }
-
       boardElement.appendChild(cell);
     });
   }
 
-  // Handle Cell Click
-  function handleCellClick(cellIndex, cell) {
-    console.log("Player clicked cell:", cellIndex); // Debugging
+  // We define the click listener as a named function so we can remove it if needed
+  function onCellClick(e) {
+    const cell = e.target;
+    const index = parseInt(cell.dataset.index, 10);
 
-    // Optimistically update the board immediately
+    // Immediately update UI (optimistic) and remove the click listener
     cell.textContent = currentPlayerSymbol;
     cell.classList.add("taken");
-    cell.removeEventListener("click", () => handleCellClick(cellIndex, cell)); // Prevent double-clicks
+    cell.removeEventListener("click", onCellClick);
 
     // Send the move to the server
-    makeMove(cellIndex);
+    socket.emit("playerMove", { gameId: currentGameId, cellIndex: index });
   }
 
-  // Make a Move
-  function makeMove(cellIndex) {
-    console.log("Making move at cell:", cellIndex); // Debugging
-    socket.emit("playerMove", { gameId: currentGameId, cellIndex });
-  }
-
-  // Replay the Game
+  // ---------------------
+  // (Optional) Replay the Game
+  // ---------------------
+  // This is only relevant if you implement replay logic on the server
   replayBtn.addEventListener("click", () => {
-    socket.emit("requestReplay", { gameId: currentGameId });
+    // e.g. You might have:
+    // socket.emit("requestReplay", { gameId: currentGameId });
+    alert("Replay logic not implemented on the server side yet.");
   });
 
+  // ---------------------
   // Error Handling
+  // ---------------------
   socket.on("errorOccurred", (message) => {
     alert(message);
   });
 
-  // Global Error Listener
+  // Log global errors
   window.addEventListener("error", (e) => logError(e.error));
   window.addEventListener("unhandledrejection", (e) => logError(e.reason));
 })();
