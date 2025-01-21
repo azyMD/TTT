@@ -78,27 +78,37 @@
 
   // Update Game
   socket.on("updateGame", (gameState) => {
-    console.log("Updated game state received from server:", gameState);
+    console.log("Updated game state received from server:", gameState); // Debugging
     currentGameState = gameState;
     renderGameState(gameState);
   });
 
   // Render Game State
   function renderGameState(game) {
+    console.log("Rendering game state:", game); // Debugging
+
+    // Clear the board
     boardElement.innerHTML = "";
+
+    // Render each cell on the board
     game.board.forEach((symbol, index) => {
       const cell = document.createElement("div");
       cell.classList.add("cell");
       cell.dataset.index = index;
-      cell.textContent = symbol || "";
+
+      // Set cell content and state
+      cell.textContent = symbol || ""; // Show 'X', 'O', or leave blank
       if (symbol) {
-        cell.classList.add("taken");
+        cell.classList.add("taken"); // Mark taken cells
       } else if (!game.winner) {
+        // Add click event listener for empty cells only if game is ongoing
         cell.addEventListener("click", () => makeMove(index));
       }
+
       boardElement.appendChild(cell);
     });
 
+    // Update game information
     if (game.winner) {
       gameInfo.textContent =
         game.winner === "draw" ? "It's a draw!" : `${game.winner} wins!`;
@@ -111,6 +121,7 @@
 
   // Make a Move
   function makeMove(cellIndex) {
+    console.log("Making move at cell:", cellIndex); // Debugging
     socket.emit("playerMove", { gameId: currentGameId, cellIndex });
   }
 
