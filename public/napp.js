@@ -24,7 +24,9 @@
     socket.emit("frontendError", { message: error.message, stack: error.stack });
   }
 
+  // ---------------------
   // Join the Lobby
+  // ---------------------
   joinBtn.addEventListener("click", () => {
     const username = usernameInput.value.trim();
     if (!username) {
