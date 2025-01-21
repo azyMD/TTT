@@ -11,24 +11,22 @@ const io = new Server(server);
 // Serve static files
 app.use(express.static("public"));
 
-// Error log file path
-const errorLogPath = path.join(__dirname, "error.log");
-
-// Utility function to log errors
-function logError(error) {
+// Error logging utility
+const logError = (error) => {
+  const errorLogPath = path.join(__dirname, "error.log");
   const errorMessage = `[${new Date().toISOString()}] ${error.stack || error}\n`;
   fs.appendFileSync(errorLogPath, errorMessage, "utf8");
-}
+};
 
 // Ongoing lobby and game states
-const lobbyUsers = new Map();
-const ongoingGames = new Map();
+const lobbyUsers = new Map(); // Stores players in the lobby
+const ongoingGames = new Map(); // Stores active games
 
 // Utility functions
 const generateGameId = () => `game_${Math.random().toString(36).substr(2, 8)}`;
 const createEmptyBoard = () => Array(9).fill(null);
 
-// Check for winner or draw
+// Check for a winner
 function checkWinner(board) {
   const winningCombos = [
     [0, 1, 2], [3, 4, 5], [6, 7, 8], // Rows
@@ -125,40 +123,51 @@ io.on("connection", (socket) => {
   // Handle moves
   socket.on("playerMove", ({ gameId, cellIndex }) => {
     try {
-      const game = ongoingGames.get(gameId);
-      if (!game || game.winner) return;
+      console.log(`Move received: gameId=${gameId}, cellIndex=${cellIndex}, playerId=${socket.id}`);
 
-      const player = game.players.find((p) => p.socketId === socket.id);
-      if (!player || game.currentPlayer !== player.symbol) {
-        console.log("Invalid move: Not this player's turn.");
+      const game = ongoingGames.get(gameId);
+      if (!game) {
+        console.error("Game not found:", gameId);
         return;
       }
 
       if (game.board[cellIndex] !== null) {
-        console.log("Invalid move: Cell already taken.");
+        console.error("Invalid move: Cell already taken.");
+        return;
+      }
+
+      const player = game.players.find((p) => p.socketId === socket.id);
+      if (!player || game.currentPlayer !== player.symbol) {
+        console.error("Invalid move: Not this player's turn.");
         return;
       }
 
       // Make the move
       game.board[cellIndex] = player.symbol;
-      game.winner = checkWinner(game.board);
+      console.log("Board updated:", game.board);
 
-      if (!game.winner) {
+      // Check for winner
+      const winner = checkWinner(game.board);
+      if (winner) {
+        game.winner = winner;
+        console.log(`Game over! Winner: ${winner}`);
+      } else if (game.board.every((cell) => cell !== null)) {
+        game.winner = "draw";
+        console.log("Game over! It's a draw.");
+      } else {
         game.currentPlayer = game.currentPlayer === "X" ? "O" : "X";
+        console.log("Next turn:", game.currentPlayer);
       }
 
+      // Broadcast the updated game state
       io.to(gameId).emit("updateGame", game);
-
-      if (game.winner) {
-        console.log(`Game over! Winner: ${game.winner}`);
-      }
     } catch (err) {
       logError(err);
       socket.emit("errorOccurred", "An error occurred while processing your move.");
     }
   });
 
-  // Handle disconnection
+  // Handle disconnections
   socket.on("disconnect", () => {
     try {
       console.log("User disconnected:", socket.id);
@@ -193,7 +202,7 @@ io.on("connection", (socket) => {
   });
 });
 
-// Global error handler
+// Global error handlers
 process.on("uncaughtException", (err) => {
   logError(err);
   console.error("Uncaught Exception:", err);
