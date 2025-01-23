@@ -1,7 +1,6 @@
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
-const fs = require("fs");
 const path = require("path");
 
 const app = express();
@@ -9,12 +8,6 @@ const server = http.createServer(app);
 const io = new Server(server);
 
 app.use(express.static("public"));
-
-const logError = (error) => {
-  const errorLogPath = path.join(__dirname, "error.log");
-  const errorMessage = `[${new Date().toISOString()}] ${error.stack || error}\n`;
-  fs.appendFileSync(errorLogPath, errorMessage, "utf8");
-};
 
 const lobbyUsers = new Map();
 const ongoingGames = new Map();
@@ -25,9 +18,9 @@ const createEmptyBoard = () => Array(9).fill(null);
 
 function checkWinner(board) {
   const winningCombos = [
-    [0, 1, 2], [3, 4, 5], [6, 7, 8],
-    [0, 3, 6], [1, 4, 7], [2, 5, 8],
-    [0, 4, 8], [2, 4, 6]
+    [0, 1, 2], [3, 4, 5], [6, 7, 8], // Rows
+    [0, 3, 6], [1, 4, 7], [2, 5, 8], // Columns
+    [0, 4, 8], [2, 4, 6],           // Diagonals
   ];
   for (const [a, b, c] of winningCombos) {
     if (board[a] && board[a] === board[b] && board[a] === board[c]) {
@@ -41,13 +34,9 @@ io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
   socket.on("joinLobby", (username) => {
-    try {
-      lobbyUsers.set(socket.id, { username, inGame: false, score: { wins: 0, losses: 0, draws: 0 } });
-      updateLobby();
-    } catch (err) {
-      logError(err);
-      socket.emit("errorOccurred", "An error occurred while joining the lobby.");
-    }
+    if (lobbyUsers.has(socket.id)) return;
+    lobbyUsers.set(socket.id, { username, inGame: false, score: { wins: 0, losses: 0, draws: 0 } });
+    updateLobby();
   });
 
   function updateLobby() {
@@ -60,62 +49,49 @@ io.on("connection", (socket) => {
     io.emit("lobbyData", users);
   }
 
-  socket.on("challengeUser", (opponentSocketId) => {
-    try {
-      const challenger = lobbyUsers.get(socket.id);
-      const opponent = lobbyUsers.get(opponentSocketId);
+  socket.on("challengeUser", (opponentId) => {
+    const challenger = lobbyUsers.get(socket.id);
+    const opponent = lobbyUsers.get(opponentId);
+    if (!challenger || !opponent || challenger.inGame || opponent.inGame) return;
 
-      if (challenger && opponent && !challenger.inGame && !opponent.inGame) {
-        io.to(opponentSocketId).emit("challengeRequest", {
-          from: socket.id,
-          fromUsername: challenger.username,
-        });
-      }
-    } catch (err) {
-      logError(err);
-    }
+    io.to(opponentId).emit("challengeRequest", {
+      from: socket.id,
+      fromUsername: challenger.username,
+    });
   });
 
   socket.on("challengeResponse", ({ from, accepted }) => {
-    try {
-      const challenger = lobbyUsers.get(from);
-      const responder = lobbyUsers.get(socket.id);
+    const challenger = lobbyUsers.get(from);
+    const responder = lobbyUsers.get(socket.id);
 
-      if (!challenger || !responder) return;
+    if (!challenger || !responder || challenger.inGame || responder.inGame) return;
 
-      if (accepted && !challenger.inGame && !responder.inGame) {
-        const gameId = generateGameId();
-        const gameState = {
-          gameId,
-          board: createEmptyBoard(),
-          currentPlayer: "X",
-          players: [
-            { socketId: from, symbol: "X", username: challenger.username },
-            { socketId: socket.id, symbol: "O", username: responder.username },
-          ],
-          winner: null,
-          replayRequests: [],
-        };
+    if (accepted) {
+      const gameId = generateGameId();
+      const gameState = {
+        gameId,
+        board: createEmptyBoard(),
+        currentPlayer: "X",
+        players: [
+          { socketId: from, symbol: "X", username: challenger.username },
+          { socketId: socket.id, symbol: "O", username: responder.username },
+        ],
+        winner: null,
+        replayRequests: [],
+      };
 
-        ongoingGames.set(gameId, gameState);
+      ongoingGames.set(gameId, gameState);
+      challenger.inGame = true;
+      responder.inGame = true;
 
-        challenger.inGame = true;
-        responder.inGame = true;
+      io.to(from).emit("startGame", gameState);
+      io.to(socket.id).emit("startGame", gameState);
 
-        const fromSocket = io.sockets.sockets.get(from);
-        const responderSocket = io.sockets.sockets.get(socket.id);
-        fromSocket?.join(gameId);
-        responderSocket?.join(gameId);
-
-        io.to(gameId).emit("startGame", gameState);
-        updateLobby();
-      } else {
-        io.to(from).emit("challengeDeclined", {
-          reason: `${responder.username} declined your challenge.`,
-        });
-      }
-    } catch (err) {
-      logError(err);
+      updateLobby();
+    } else {
+      io.to(from).emit("challengeDeclined", {
+        reason: `${responder.username} declined your challenge.`,
+      });
     }
   });
 
@@ -140,23 +116,20 @@ io.on("connection", (socket) => {
     ongoingGames.set(gameId, gameState);
     user.inGame = true;
 
-    socket.join(gameId);
     io.to(socket.id).emit("startGame", gameState);
     updateLobby();
   });
 
   socket.on("playerMove", ({ gameId, cellIndex }) => {
     const game = ongoingGames.get(gameId);
-    if (!game) return;
-
-    if (game.board[cellIndex] !== null || game.winner) return;
+    if (!game || game.board[cellIndex] !== null || game.winner) return;
 
     const player = game.players.find((p) => p.socketId === socket.id);
     if (!player || game.currentPlayer !== player.symbol) return;
 
     game.board[cellIndex] = player.symbol;
-
     const winner = checkWinner(game.board);
+
     if (winner) {
       game.winner = winner;
 
