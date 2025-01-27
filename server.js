@@ -1,295 +1,286 @@
-const express = require("express");
-const http = require("http");
-const { Server } = require("socket.io");
-const path = require("path");
+const path = require('path');
+const express = require('express');
+const http = require('http');
+const socketIO = require('socket.io');
+
+// LowDB setup
+const { Low, JSONFile } = require('lowdb');
+const adapter = new JSONFile('db.json');
+const db = new Low(adapter);
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = socketIO(server);
 
-// Serve the "public" folder
-app.use(express.static(path.join(__dirname, "public")));
+// Serve static files from /public
+app.use(express.static(path.join(__dirname, 'public')));
 
-// Lobby: track { socketId => { username, inGame, score: {wins, losses, draws} } }
-const lobbyUsers = new Map();
+// In-memory store of who’s logged in + active games
+let activeUsers = {};   // { socketId: username }
+let activeGames = {};   // { gameId: { player1, player2, board, currentTurn, winner } }
 
-// Ongoing games: { gameId => gameState }
-const ongoingGames = new Map();
-
-function generateGameId() {
-  return "game_" + Math.random().toString(36).substr(2, 8);
+/**
+ * Initialize the DB (LowDB) with default structure if empty.
+ */
+async function initDB() {
+  await db.read();
+  db.data ||= { users: [] }; // If db.data is undefined, set default structure
+  await db.write();
 }
 
-function createEmptyBoard() {
-  return Array(9).fill(null);
+/**
+ * Get or create a user record in the database
+ */
+function getOrCreateUser(username) {
+  const existingUser = db.data.users.find(u => u.username === username);
+  if (existingUser) return existingUser;
+
+  const newUser = {
+    username,
+    games: 0,
+    wins: 0,
+    losses: 0
+  };
+  db.data.users.push(newUser);
+  return newUser;
 }
 
-function checkWinner(board) {
-  const combos = [
-    [0,1,2],[3,4,5],[6,7,8],
-    [0,3,6],[1,4,7],[2,5,8],
-    [0,4,8],[2,4,6]
-  ];
-  for (let [a,b,c] of combos) {
-    if (board[a] && board[a] === board[b] && board[b] === board[c]) {
-      return board[a]; // "X" or "O"
-    }
+// --- EXPRESS ROUTES ---
+
+// Simple custom login (GET /login?username=John)
+app.get('/login', async (req, res) => {
+  const { username } = req.query;
+  if (!username) {
+    return res.status(400).json({ success: false, message: 'Username is required.' });
   }
-  return board.every(cell => cell !== null) ? "draw" : null;
-}
+  await initDB();
+  const user = getOrCreateUser(username);
+  await db.write();
+  return res.json({ success: true, user });
+});
 
-// Socket.IO
-io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+// Placeholder Telegram login (GET /telegram-login)
+app.get('/telegram-login', async (req, res) => {
+  // In a real-world scenario, you'd perform Telegram OAuth or Widget verification here.
+  // For demonstration, we just call them "TelegramUser".
+  await initDB();
+  const user = getOrCreateUser('TelegramUser');
+  await db.write();
+  return res.json({ success: true, user });
+});
 
-  // Join Lobby
-  socket.on("joinLobby", (username) => {
-    if (lobbyUsers.has(socket.id)) return;
-    lobbyUsers.set(socket.id, {
-      username,
-      inGame: false,
-      score: { wins: 0, losses: 0, draws: 0 }
-    });
-    updateLobby();
+// --- SOCKET.IO ---
+
+io.on('connection', (socket) => {
+  console.log('A user connected:', socket.id);
+
+  // User joins the lobby
+  socket.on('joinLobby', async (username) => {
+    activeUsers[socket.id] = username;
+    io.emit('lobbyUpdate', getLobbyUsers());
   });
 
-  function updateLobby() {
-    const users = Array.from(lobbyUsers.entries()).map(([id, user]) => ({
-      socketId: id,
-      username: user.username,
-      inGame: user.inGame,
-      score: user.score
-    }));
-    io.emit("lobbyData", users);
-  }
+  // Challenge another player
+  socket.on('challengePlayer', (challengedSocketId) => {
+    const challengerUsername = activeUsers[socket.id];
+    const challengedUsername = activeUsers[challengedSocketId];
 
-  // Challenge
-  socket.on("challengeUser", (opponentId) => {
-    const challenger = lobbyUsers.get(socket.id);
-    const opponent = lobbyUsers.get(opponentId);
-    if (!challenger || !opponent) return;
-    if (challenger.inGame || opponent.inGame) return;
-
-    io.to(opponentId).emit("challengeRequest", {
-      from: socket.id,
-      fromUsername: challenger.username
+    // Notify challenged player
+    io.to(challengedSocketId).emit('challengeReceived', {
+      challengerSocketId: socket.id,
+      challengerUsername
     });
   });
 
-  socket.on("challengeResponse", ({ from, accepted }) => {
-    const challenger = lobbyUsers.get(from);
-    const responder = lobbyUsers.get(socket.id);
-    if (!challenger || !responder) return;
-    if (challenger.inGame || responder.inGame) return;
+  // Accept challenge
+  socket.on('acceptChallenge', (challengerSocketId) => {
+    const player1 = challengerSocketId;
+    const player2 = socket.id;
 
-    if (accepted) {
-      const gameId = generateGameId();
-      const gameState = {
-        gameId,
-        board: createEmptyBoard(),
-        currentPlayer: "X",
-        players: [
-          { socketId: from, symbol: "X", username: challenger.username },
-          { socketId: socket.id, symbol: "O", username: responder.username }
-        ],
-        winner: null,
-        replayRequests: []
-      };
-
-      ongoingGames.set(gameId, gameState);
-      challenger.inGame = true;
-      responder.inGame = true;
-
-      // Start game for both
-      io.to(from).emit("startGame", gameState);
-      io.to(socket.id).emit("startGame", gameState);
-
-      updateLobby();
-    } else {
-      io.to(from).emit("challengeDeclined", {
-        reason: `${responder.username} declined your challenge.`
-      });
-    }
-  });
-
-  // Play with Bot
-  socket.on("playWithBot", () => {
-    const user = lobbyUsers.get(socket.id);
-    if (!user || user.inGame) return;
-
-    const gameId = generateGameId();
-    const gameState = {
-      gameId,
-      board: createEmptyBoard(),
-      currentPlayer: "X",
-      players: [
-        { socketId: socket.id, symbol: "X", username: user.username },
-        { socketId: "BOT", symbol: "O", username: "Bot" }
-      ],
-      winner: null,
-      replayRequests: [],
-      isBotGame: true
+    // Create game ID
+    const gameId = player1 + player2 + Date.now(); // guaranteed unique
+    activeGames[gameId] = {
+      player1,
+      player2,
+      board: Array(9).fill(null), // 3x3 TicTacToe
+      currentTurn: player1,
+      winner: null
     };
 
-    ongoingGames.set(gameId, gameState);
-    user.inGame = true;
+    // Start the game for both players
+    io.to(player1).emit('startGame', {
+      gameId,
+      yourTurn: true,
+      symbol: 'X'
+    });
+    io.to(player2).emit('startGame', {
+      gameId,
+      yourTurn: false,
+      symbol: 'O'
+    });
 
-    io.to(socket.id).emit("startGame", gameState);
-    updateLobby();
+    // Update lobby (so they appear in-game)
+    io.emit('lobbyUpdate', getLobbyUsers());
   });
 
-  // Player Move
-  socket.on("playerMove", ({ gameId, cellIndex }) => {
-    const game = ongoingGames.get(gameId);
+  // Decline challenge
+  socket.on('declineChallenge', (challengerSocketId) => {
+    io.to(challengerSocketId).emit('challengeDeclined', {});
+  });
+
+  // Make a move
+  socket.on('makeMove', async ({ gameId, index, symbol }) => {
+    const game = activeGames[gameId];
     if (!game) return;
-    if (game.board[cellIndex] !== null || game.winner) return;
+    if (game.currentTurn !== socket.id) return; // Not your turn
 
-    const player = game.players.find(p => p.socketId === socket.id);
-    if (!player || player.symbol !== game.currentPlayer) return;
+    // Place symbol if cell is empty
+    if (game.board[index] === null) {
+      game.board[index] = symbol;
+      // Switch turn
+      game.currentTurn = (game.currentTurn === game.player1) ? game.player2 : game.player1;
 
-    game.board[cellIndex] = player.symbol;
-    const result = checkWinner(game.board);
+      // Check if there's a winner or draw
+      const winner = checkWinner(game.board);
+      game.winner = winner;
 
-    if (result) {
-      game.winner = result;
-      if (result === "draw") {
-        game.players.forEach((p) => {
-          if (p.socketId !== "BOT") {
-            lobbyUsers.get(p.socketId).score.draws++;
-          }
-        });
-      } else {
-        // We have a winner "X" or "O"
-        const winnerPlayer = game.players.find((p) => p.symbol === result);
-        const loserPlayer = game.players.find((p) => p.symbol !== result);
-        if (winnerPlayer.socketId !== "BOT") {
-          lobbyUsers.get(winnerPlayer.socketId).score.wins++;
-        }
-        if (loserPlayer.socketId !== "BOT") {
-          lobbyUsers.get(loserPlayer.socketId).score.losses++;
-        }
+      let gameOver = false;
+      await initDB();
+
+      if (winner) {
+        gameOver = true;
+        // Update stats
+        const winnerId = (winner === 'X') ? game.player1 : game.player2;
+        const loserId  = (winner === 'X') ? game.player2 : game.player1;
+
+        const winnerUsername = activeUsers[winnerId];
+        const loserUsername  = activeUsers[loserId];
+
+        const winnerUser = db.data.users.find(u => u.username === winnerUsername);
+        const loserUser  = db.data.users.find(u => u.username === loserUsername);
+
+        winnerUser.games += 1;
+        winnerUser.wins += 1;
+        loserUser.games += 1;
+        loserUser.losses += 1;
+
+        await db.write();
+      } 
+      else if (isDraw(game.board)) {
+        gameOver = true;
+        // Everyone gets a "game played" increment
+        const user1Name = activeUsers[game.player1];
+        const user2Name = activeUsers[game.player2];
+        const user1 = db.data.users.find(u => u.username === user1Name);
+        const user2 = db.data.users.find(u => u.username === user2Name);
+        user1.games += 1;
+        user2.games += 1;
+        await db.write();
       }
-    } else {
-      game.currentPlayer = (game.currentPlayer === "X") ? "O" : "X";
-      // If it's a bot game and next is "O" => do bot move
-      if (game.isBotGame && game.currentPlayer === "O" && !game.winner) {
-        // trivial bot: pick random empty cell
-        const emptyIndices = game.board.map((val, i) => val === null ? i : null).filter(i => i !== null);
-        if (emptyIndices.length) {
-          const botMove = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
-          game.board[botMove] = "O";
-          const botResult = checkWinner(game.board);
-          if (botResult) {
-            game.winner = botResult;
-            if (botResult === "draw") {
-              // user draws
-              const userPlayer = game.players.find(p => p.socketId !== "BOT");
-              if (userPlayer) lobbyUsers.get(userPlayer.socketId).score.draws++;
-            } else {
-              // O wins or X wins
-              if (botResult === "O") {
-                // user loses
-                const userPlayer = game.players.find(p => p.symbol === "X");
-                if (userPlayer) lobbyUsers.get(userPlayer.socketId).score.losses++;
-              } else {
-                // "X" wins => user wins
-                const userPlayer = game.players.find(p => p.symbol === "X");
-                if (userPlayer) lobbyUsers.get(userPlayer.socketId).score.wins++;
-              }
-            }
-          } else {
-            game.currentPlayer = "X";
-          }
-        }
-      }
-    }
 
-    io.to(gameId).emit("updateGame", game);
-    updateLobby(); // so we see updated scores in lobby (on next refresh)
-  });
+      // Emit board updates
+      io.to(game.player1).emit('boardUpdate', {
+        board: game.board,
+        yourTurn: game.currentTurn === game.player1,
+        gameOver,
+        winner: game.winner
+      });
+      io.to(game.player2).emit('boardUpdate', {
+        board: game.board,
+        yourTurn: game.currentTurn === game.player2,
+        gameOver,
+        winner: game.winner
+      });
 
-  // Request Replay
-  socket.on("requestReplay", ({ gameId }) => {
-    const game = ongoingGames.get(gameId);
-    if (!game) return;
-
-    if (game.isBotGame) {
-      // Single player => can reset immediately
-      game.board = createEmptyBoard();
-      game.currentPlayer = "X";
-      game.winner = null;
-      io.to(gameId).emit("updateGame", game);
-    } else {
-      // multiplayer => both must request
-      if (!game.replayRequests.includes(socket.id)) {
-        game.replayRequests.push(socket.id);
-      }
-      if (game.replayRequests.length === 2) {
-        game.board = createEmptyBoard();
-        game.currentPlayer = "X";
-        game.winner = null;
-        game.replayRequests = [];
-        io.to(gameId).emit("updateGame", game);
+      // If game is over, remove from activeGames after a delay
+      if (gameOver) {
+        setTimeout(() => {
+          delete activeGames[gameId];
+          io.emit('lobbyUpdate', getLobbyUsers());
+        }, 3000);
       }
     }
   });
 
-  // Exit to Lobby
-  socket.on("exitToLobby", ({ gameId }) => {
-    const game = ongoingGames.get(gameId);
-    if (!game) return;
+  // Quit game
+  socket.on('quitGame', async ({ gameId }) => {
+    const game = activeGames[gameId];
+    if (game) {
+      const quitterId = socket.id;
+      const opponentId = (quitterId === game.player1) ? game.player2 : game.player1;
 
-    const user = lobbyUsers.get(socket.id);
-    if (user) user.inGame = false;
+      // Award opponent the win
+      await initDB();
+      const quitterUsername = activeUsers[quitterId];
+      const opponentUsername = activeUsers[opponentId];
 
-    if (!game.isBotGame) {
-      const opponent = game.players.find(p => p.socketId !== socket.id);
-      if (opponent && opponent.socketId !== "BOT") {
-        const oppUser = lobbyUsers.get(opponent.socketId);
-        if (oppUser) oppUser.inGame = false;
-        io.to(opponent.socketId).emit("updateGame", {
-          ...game,
-          winner: "abandoned"
-        });
-      }
+      const quitterUser  = db.data.users.find(u => u.username === quitterUsername);
+      const opponentUser = db.data.users.find(u => u.username === opponentUsername);
+
+      quitterUser.games += 1;
+      quitterUser.losses += 1;
+      opponentUser.games += 1;
+      opponentUser.wins += 1;
+      await db.write();
+
+      // Notify players
+      io.to(opponentId).emit('opponentQuit', {});
+      io.to(quitterId).emit('youQuit', {});
+
+      // Remove game
+      delete activeGames[gameId];
+      io.emit('lobbyUpdate', getLobbyUsers());
     }
-    ongoingGames.delete(gameId);
-    socket.leave(gameId);
-
-    updateLobby();
-    io.to(socket.id).emit("returnedToLobby");
   });
 
-  // Disconnect
-  socket.on("disconnect", () => {
-    const user = lobbyUsers.get(socket.id);
-    if (!user) return;
-
-    user.inGame = false;
-    lobbyUsers.delete(socket.id);
-
-    const gameId = Array.from(ongoingGames.keys()).find(id =>
-      ongoingGames.get(id).players.some(p => p.socketId === socket.id)
-    );
-    if (gameId) {
-      const game = ongoingGames.get(gameId);
-      const opponent = game.players.find(p => p.socketId !== socket.id);
-      if (opponent && opponent.socketId !== "BOT") {
-        lobbyUsers.get(opponent.socketId).inGame = false;
-        io.to(opponent.socketId).emit("updateGame", {
-          ...game,
-          winner: "abandoned"
-        });
-      }
-      ongoingGames.delete(gameId);
-    }
-
-    updateLobby();
+  // On disconnect, remove user
+  socket.on('disconnect', () => {
+    delete activeUsers[socket.id];
+    io.emit('lobbyUpdate', getLobbyUsers());
+    console.log('User disconnected:', socket.id);
   });
 });
 
-// IMPORTANT: Use process.env.PORT for Railway
+// --- HELPER FUNCTIONS ---
+
+function getLobbyUsers() {
+  // figure out who is in a game
+  const inGamePlayers = new Set();
+  for (const gId of Object.keys(activeGames)) {
+    const g = activeGames[gId];
+    inGamePlayers.add(g.player1);
+    inGamePlayers.add(g.player2);
+  }
+
+  // Return array of { socketId, username, status }
+  return Object.entries(activeUsers).map(([socketId, username]) => {
+    const status = inGamePlayers.has(socketId) ? 'in-game' : 'available';
+    return { socketId, username, status };
+  });
+}
+
+// Check for winner
+function checkWinner(board) {
+  const combos = [
+    [0,1,2], [3,4,5], [6,7,8],  // rows
+    [0,3,6], [1,4,7], [2,5,8],  // columns
+    [0,4,8], [2,4,6]            // diagonals
+  ];
+  for (let [a,b,c] of combos) {
+    if (board[a] && board[a] === board[b] && board[b] === board[c]) {
+      return board[a]; // 'X' or 'O'
+    }
+  }
+  return null;
+}
+
+function isDraw(board) {
+  return board.every(cell => cell !== null);
+}
+
+// Start server
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+server.listen(PORT, async () => {
+  await initDB();
+  console.log(`Server running on port ${PORT}`);
 });
