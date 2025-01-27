@@ -1,74 +1,83 @@
-// server.js
+/**
+ * server.js
+ * TicTacToe with Node.js, Express, Socket.IO, LowDB v4 (CommonJS)
+ */
+
 const path = require('path');
 const express = require('express');
 const http = require('http');
 const socketIO = require('socket.io');
 
-// --- LowDB v4 (CommonJS) ---
+// ---- LowDB v4 (CommonJS) ----
 const low = require('lowdb');
 const FileSync = require('lowdb/adapters/FileSync');
 
-// Create DB instance
+// Create (or load) the local JSON database (db.json)
 const adapter = new FileSync('db.json');
 const db = low(adapter);
 
-// If "users" doesn't exist, set a default structure
+// If "users" doesn't exist in db.json, set a default structure
 db.defaults({ users: [] }).write();
 
-// Express / Socket setup
+// Create Express app & HTTP server
 const app = express();
 const server = http.createServer(app);
 const io = socketIO(server);
 
-// Serve static files
+// Serve static files from the "public" folder
 app.use(express.static(path.join(__dirname, 'public')));
 
 // In-memory store for active users & games
-let activeUsers = {}; // { socketId: username }
-let activeGames = {}; // { gameId: { player1, player2, board, currentTurn, winner } }
+let activeUsers = {};   // { socketId: username }
+let activeGames = {};   // { gameId: { player1, player2, board, currentTurn, winner } }
 
-// Utility: Get or create a user
+// Utility: Get or create user in LowDB
 function getOrCreateUser(username) {
-  const existing = db.get('users').find({ username }).value();
-  if (existing) return existing;
+  // Check if user already exists
+  const existingUser = db.get('users').find({ username }).value();
+  if (existingUser) return existingUser;
 
-  // Otherwise create a new user record
-  const newUser = { username, games: 0, wins: 0, losses: 0 };
-  db.get('users').push(newUser).write();
+  // Otherwise, create a new user record
+  const newUser = {
+    username,
+    games: 0,
+    wins: 0,
+    losses: 0
+  };
+  db.get('users').push(newUser).write(); // persist to db.json
   return newUser;
 }
 
-// ---- Express Routes ----
+// ----------------- EXPRESS ROUTES -----------------
 
-// 1) Simple custom login: /login?username=John
+// 1) Simple login route: /login?username=John
 app.get('/login', (req, res) => {
   const { username } = req.query;
   if (!username) {
     return res.status(400).json({ success: false, message: 'Username is required.' });
   }
-  
   const user = getOrCreateUser(username);
   return res.json({ success: true, user });
 });
 
 // 2) Placeholder for Telegram login: /telegram-login
 app.get('/telegram-login', (req, res) => {
-  // Pretend we do Telegram OAuth. We'll just use a dummy "TelegramUser".
+  // In a real app, you'd do Telegram OAuth. For demo, we just call them "TelegramUser".
   const user = getOrCreateUser('TelegramUser');
   return res.json({ success: true, user });
 });
 
-// ---- Socket.IO ----
+// ----------------- SOCKET.IO EVENTS -----------------
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
-  // User joins lobby
+  // User joins the lobby
   socket.on('joinLobby', (username) => {
     activeUsers[socket.id] = username;
     io.emit('lobbyUpdate', getLobbyUsers());
   });
 
-  // Challenge a player
+  // Challenge another player
   socket.on('challengePlayer', (challengedSocketId) => {
     const challengerUsername = activeUsers[socket.id];
     io.to(challengedSocketId).emit('challengeReceived', {
@@ -82,7 +91,7 @@ io.on('connection', (socket) => {
     const player1 = challengerSocketId;
     const player2 = socket.id;
 
-    // Create a unique game ID
+    // Create unique game ID
     const gameId = player1 + player2 + Date.now();
 
     activeGames[gameId] = {
@@ -93,7 +102,7 @@ io.on('connection', (socket) => {
       winner: null
     };
 
-    // Start the game for both players
+    // Notify both players to start the game
     io.to(player1).emit('startGame', {
       gameId,
       yourTurn: true,
@@ -120,19 +129,20 @@ io.on('connection', (socket) => {
     if (!game) return;
     if (game.currentTurn !== socket.id) return;
 
-    // Place the move if cell is empty
+    // If cell is empty, place symbol
     if (game.board[index] === null) {
       game.board[index] = symbol;
+      // Switch turns
       game.currentTurn = (game.currentTurn === game.player1) ? game.player2 : game.player1;
 
-      // Check winner or draw
+      // Check for a winner or draw
       const winner = checkWinner(game.board);
       game.winner = winner;
 
       let gameOver = false;
       if (winner) {
         gameOver = true;
-        // Update stats in DB
+        // Update stats in db.json
         const winnerId = (winner === 'X') ? game.player1 : game.player2;
         const loserId  = (winner === 'X') ? game.player2 : game.player1;
 
@@ -146,24 +156,22 @@ io.on('connection', (socket) => {
         winnerUser.wins += 1;
         loserUser.games += 1;
         loserUser.losses += 1;
-
-        db.write(); // Save changes
+        db.write();
       } else if (isDraw(game.board)) {
         gameOver = true;
+        // Both get a game increment
+        const player1Name = activeUsers[game.player1];
+        const player2Name = activeUsers[game.player2];
 
-        // Both players get a game increment
-        const name1 = activeUsers[game.player1];
-        const name2 = activeUsers[game.player2];
-
-        const user1 = db.get('users').find({ username: name1 }).value();
-        const user2 = db.get('users').find({ username: name2 }).value();
+        const user1 = db.get('users').find({ username: player1Name }).value();
+        const user2 = db.get('users').find({ username: player2Name }).value();
 
         user1.games += 1;
         user2.games += 1;
         db.write();
       }
 
-      // Send updated board to both players
+      // Broadcast updated board to both players
       io.to(game.player1).emit('boardUpdate', {
         board: game.board,
         yourTurn: game.currentTurn === game.player1,
@@ -177,7 +185,7 @@ io.on('connection', (socket) => {
         winner
       });
 
-      // If over, remove game after a short delay
+      // Remove game after short delay if over
       if (gameOver) {
         setTimeout(() => {
           delete activeGames[gameId];
@@ -194,8 +202,8 @@ io.on('connection', (socket) => {
       const quitterId = socket.id;
       const opponentId = (quitterId === game.player1) ? game.player2 : game.player1;
 
-      // Update stats => Opponent gets a win
-      const quitterName = activeUsers[quitterId];
+      // Opponent gets a win
+      const quitterName  = activeUsers[quitterId];
       const opponentName = activeUsers[opponentId];
 
       const quitterUser  = db.get('users').find({ username: quitterName }).value();
@@ -207,7 +215,7 @@ io.on('connection', (socket) => {
       opponentUser.wins += 1;
       db.write();
 
-      // Notify players
+      // Notify both players
       io.to(opponentId).emit('opponentQuit', {});
       io.to(quitterId).emit('youQuit', {});
 
@@ -224,24 +232,25 @@ io.on('connection', (socket) => {
   });
 });
 
-// Helper: Return array of users with status
+// Return an array of users with 'available' or 'in-game' status
 function getLobbyUsers() {
   const inGamePlayers = new Set();
-  Object.values(activeGames).forEach((game) => {
+  for (const gId in activeGames) {
+    const game = activeGames[gId];
     inGamePlayers.add(game.player1);
     inGamePlayers.add(game.player2);
-  });
+  }
   return Object.entries(activeUsers).map(([socketId, username]) => {
     const status = inGamePlayers.has(socketId) ? 'in-game' : 'available';
     return { socketId, username, status };
   });
 }
 
-// TicTacToe helpers
+// Check if there's a winner (board is 3x3, indexes 0..8)
 function checkWinner(board) {
   const combos = [
     [0,1,2],[3,4,5],[6,7,8], // rows
-    [0,3,6],[1,4,7],[2,5,8], // cols
+    [0,3,6],[1,4,7],[2,5,8], // columns
     [0,4,8],[2,4,6]          // diagonals
   ];
   for (let [a,b,c] of combos) {
@@ -252,11 +261,12 @@ function checkWinner(board) {
   return null;
 }
 
+// Check if all cells are filled -> draw
 function isDraw(board) {
   return board.every(cell => cell !== null);
 }
 
-// Start the server
+// Start server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
