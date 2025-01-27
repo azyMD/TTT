@@ -1,14 +1,18 @@
 {
-  "name": "tictactoe",
+  "name": "tictactoe-esm",
   "version": "1.0.0",
-  "description": "A Node.js project for TicTacToe",
+  "type": "module",
+  "description": "ESM-based TicTacToe app",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
   "dependencies": {
-    "express": "^4.18.2",
-    "lowdb": "^4.0.1",
-    "socket.io": "^4.6.1"
+    "express": "^4.21.2",
+    "lowdb": "^6.1.1",
+    "socket.io": "^4.8.1"
   }
 }

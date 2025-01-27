@@ -1,57 +1,36 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>TicTacToe</title>
+  <meta charset="UTF-8">
+  <title>TicTacToe ESM</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="app">
-    <!-- LOGIN SCREEN -->
-    <div id="login-screen" class="screen">
-      <h1>Welcome to TicTacToe!</h1>
-      <input type="text" id="username" placeholder="Enter your username" />
-      <button id="login-btn">Login</button>
-      <p>Or</p>
-      <button id="telegram-login-btn">Login with Telegram</button>
-    </div>
-
-    <!-- LOBBY SCREEN -->
-    <div id="lobby-screen" class="screen hidden">
-      <div class="header">
-        <h2>Lobby</h2>
-        <div id="user-info">
-          <span id="current-username"></span>
-          <span class="badge" id="stats-badge">(i)</span>
-        </div>
-      </div>
-      <!-- Stats popup -->
-      <div id="stats-popup" class="popup hidden"></div>
-
-      <div class="lobby-actions">
-        <button id="play-bot-btn">Play with Bot (Placeholder)</button>
-      </div>
-
-      <h3>Available Players</h3>
-      <div id="players-list"></div>
-    </div>
-
-    <!-- GAME SCREEN -->
-    <div id="game-screen" class="screen hidden">
-      <div class="header">
-        <h2>TicTacToe - <span id="turn-indicator"></span></h2>
-        <button id="quit-game-btn">Quit Game</button>
-      </div>
-      <div id="board"></div>
-      <div id="status-msg"></div>
-      <button id="replay-btn" class="hidden">Replay</button>
-    </div>
+  <div id="login-screen" class="screen">
+    <h1>Welcome to TicTacToe (ESM)</h1>
+    <input id="username" placeholder="Enter your username" />
+    <button id="login-btn">Login</button>
+    <p>Or</p>
+    <button id="telegram-login-btn">Login with Telegram</button>
   </div>
 
-  <!-- Socket.IO -->
+  <div id="lobby-screen" class="screen hidden">
+    <h2>Lobby</h2>
+    <span id="current-user"></span> 
+    <button id="play-bot-btn">Play with Bot (TODO)</button>
+    <h3>Players</h3>
+    <div id="players-list"></div>
+  </div>
+
+  <div id="game-screen" class="screen hidden">
+    <h2>TicTacToe <span id="turn-indicator"></span></h2>
+    <button id="quit-game-btn">Quit Game</button>
+    <div id="board"></div>
+    <div id="status-msg"></div>
+    <button id="replay-btn" class="hidden">Replay</button>
+  </div>
+
   <script src="/socket.io/socket.io.js"></script>
-  <!-- Client JS -->
   <script src="client.js"></script>
 </body>
 </html>

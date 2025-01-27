@@ -1,10 +1,7 @@
-/* Basic warm, minimal styling. Customize as you wish. */
-
 body {
   margin: 0;
-  font-family: Arial, sans-serif;
-  background: #ffe8d6; /* warm background */
-  color: #333;
+  font-family: sans-serif;
+  background: #ffe8d6;
 }
 
 .screen {
@@ -17,61 +14,6 @@ body {
 
 .hidden {
   display: none;
-}
-
-h1, h2, h3 {
-  margin: 0.5rem 0;
-}
-
-input {
-  padding: 10px;
-  margin: 5px;
-  font-size: 1em;
-}
-
-button {
-  padding: 10px 20px;
-  margin: 5px;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-  background: #ff7f50; /* Coral */
-  color: #fff;
-  font-size: 1em;
-}
-
-button:hover {
-  background: #ff5722; /* Darker coral/orange */
-}
-
-.header {
-  display: flex;
-  width: 100%;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0 20px;
-}
-
-#players-list {
-  margin-top: 10px;
-}
-
-.player-item {
-  padding: 10px;
-  margin: 5px 0;
-  background: #fff7f0;
-  border: 1px solid #ccc;
-  border-radius: 5px;
-  cursor: pointer;
-}
-
-.player-available {
-  border-left: 5px solid green;
-}
-
-.player-in-game {
-  border-left: 5px solid red;
-  opacity: 0.7;
 }
 
 #board {
@@ -94,20 +36,4 @@ button:hover {
 
 .cell:hover {
   background: #ffe1cc;
-}
-
-.badge {
-  margin-left: 10px;
-  cursor: pointer;
-  color: #555;
-}
-
-.popup {
-  position: absolute;
-  top: 80px;
-  right: 30px;
-  background: #ffffffcc;
-  padding: 10px;
-  border: 1px solid #ccc;
-  border-radius: 8px;
 }
