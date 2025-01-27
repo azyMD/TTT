@@ -1,14 +1,14 @@
 {
   "name": "my-tictactoe",
   "version": "1.0.0",
-  "description": "A minimal TicTacToe web app with Node.js, Socket.IO, and LowDB",
+  "description": "A minimal TicTacToe web app with Node.js, Socket.IO, and LowDB v4",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "lowdb": "^5.0.4",
-    "socket.io": "^4.6.1"
+    "socket.io": "^4.6.1",
+    "lowdb": "^4.0.0"
   }
 }

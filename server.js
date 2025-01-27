@@ -1,91 +1,76 @@
+// server.js
 const path = require('path');
 const express = require('express');
 const http = require('http');
 const socketIO = require('socket.io');
 
-// LowDB setup
-const { Low, JSONFile } = require('lowdb');
-const adapter = new JSONFile('db.json');
-const db = new Low(adapter);
+// --- LowDB v4 (CommonJS) ---
+const low = require('lowdb');
+const FileSync = require('lowdb/adapters/FileSync');
 
+// Create DB instance
+const adapter = new FileSync('db.json');
+const db = low(adapter);
+
+// If "users" doesn't exist, set a default structure
+db.defaults({ users: [] }).write();
+
+// Express / Socket setup
 const app = express();
 const server = http.createServer(app);
 const io = socketIO(server);
 
-// Serve static files from /public
+// Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
 
-// In-memory store of who’s logged in + active games
-let activeUsers = {};   // { socketId: username }
-let activeGames = {};   // { gameId: { player1, player2, board, currentTurn, winner } }
+// In-memory store for active users & games
+let activeUsers = {}; // { socketId: username }
+let activeGames = {}; // { gameId: { player1, player2, board, currentTurn, winner } }
 
-/**
- * Initialize the DB (LowDB) with default structure if empty.
- */
-async function initDB() {
-  await db.read();
-  db.data ||= { users: [] }; // If db.data is undefined, set default structure
-  await db.write();
-}
-
-/**
- * Get or create a user record in the database
- */
+// Utility: Get or create a user
 function getOrCreateUser(username) {
-  const existingUser = db.data.users.find(u => u.username === username);
-  if (existingUser) return existingUser;
+  const existing = db.get('users').find({ username }).value();
+  if (existing) return existing;
 
-  const newUser = {
-    username,
-    games: 0,
-    wins: 0,
-    losses: 0
-  };
-  db.data.users.push(newUser);
+  // Otherwise create a new user record
+  const newUser = { username, games: 0, wins: 0, losses: 0 };
+  db.get('users').push(newUser).write();
   return newUser;
 }
 
-// --- EXPRESS ROUTES ---
+// ---- Express Routes ----
 
-// Simple custom login (GET /login?username=John)
-app.get('/login', async (req, res) => {
+// 1) Simple custom login: /login?username=John
+app.get('/login', (req, res) => {
   const { username } = req.query;
   if (!username) {
     return res.status(400).json({ success: false, message: 'Username is required.' });
   }
-  await initDB();
+  
   const user = getOrCreateUser(username);
-  await db.write();
   return res.json({ success: true, user });
 });
 
-// Placeholder Telegram login (GET /telegram-login)
-app.get('/telegram-login', async (req, res) => {
-  // In a real-world scenario, you'd perform Telegram OAuth or Widget verification here.
-  // For demonstration, we just call them "TelegramUser".
-  await initDB();
+// 2) Placeholder for Telegram login: /telegram-login
+app.get('/telegram-login', (req, res) => {
+  // Pretend we do Telegram OAuth. We'll just use a dummy "TelegramUser".
   const user = getOrCreateUser('TelegramUser');
-  await db.write();
   return res.json({ success: true, user });
 });
 
-// --- SOCKET.IO ---
-
+// ---- Socket.IO ----
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
 
-  // User joins the lobby
-  socket.on('joinLobby', async (username) => {
+  // User joins lobby
+  socket.on('joinLobby', (username) => {
     activeUsers[socket.id] = username;
     io.emit('lobbyUpdate', getLobbyUsers());
   });
 
-  // Challenge another player
+  // Challenge a player
   socket.on('challengePlayer', (challengedSocketId) => {
     const challengerUsername = activeUsers[socket.id];
-    const challengedUsername = activeUsers[challengedSocketId];
-
-    // Notify challenged player
     io.to(challengedSocketId).emit('challengeReceived', {
       challengerSocketId: socket.id,
       challengerUsername
@@ -97,12 +82,13 @@ io.on('connection', (socket) => {
     const player1 = challengerSocketId;
     const player2 = socket.id;
 
-    // Create game ID
-    const gameId = player1 + player2 + Date.now(); // guaranteed unique
+    // Create a unique game ID
+    const gameId = player1 + player2 + Date.now();
+
     activeGames[gameId] = {
       player1,
       player2,
-      board: Array(9).fill(null), // 3x3 TicTacToe
+      board: Array(9).fill(null), // 3x3
       currentTurn: player1,
       winner: null
     };
@@ -119,80 +105,79 @@ io.on('connection', (socket) => {
       symbol: 'O'
     });
 
-    // Update lobby (so they appear in-game)
+    // Update lobby
     io.emit('lobbyUpdate', getLobbyUsers());
   });
 
   // Decline challenge
   socket.on('declineChallenge', (challengerSocketId) => {
-    io.to(challengerSocketId).emit('challengeDeclined', {});
+    io.to(challengerSocketId).emit('challengeDeclined');
   });
 
   // Make a move
-  socket.on('makeMove', async ({ gameId, index, symbol }) => {
+  socket.on('makeMove', ({ gameId, index, symbol }) => {
     const game = activeGames[gameId];
     if (!game) return;
-    if (game.currentTurn !== socket.id) return; // Not your turn
+    if (game.currentTurn !== socket.id) return;
 
-    // Place symbol if cell is empty
+    // Place the move if cell is empty
     if (game.board[index] === null) {
       game.board[index] = symbol;
-      // Switch turn
       game.currentTurn = (game.currentTurn === game.player1) ? game.player2 : game.player1;
 
-      // Check if there's a winner or draw
+      // Check winner or draw
       const winner = checkWinner(game.board);
       game.winner = winner;
 
       let gameOver = false;
-      await initDB();
-
       if (winner) {
         gameOver = true;
-        // Update stats
+        // Update stats in DB
         const winnerId = (winner === 'X') ? game.player1 : game.player2;
         const loserId  = (winner === 'X') ? game.player2 : game.player1;
 
-        const winnerUsername = activeUsers[winnerId];
-        const loserUsername  = activeUsers[loserId];
+        const winnerName = activeUsers[winnerId];
+        const loserName  = activeUsers[loserId];
 
-        const winnerUser = db.data.users.find(u => u.username === winnerUsername);
-        const loserUser  = db.data.users.find(u => u.username === loserUsername);
+        const winnerUser = db.get('users').find({ username: winnerName }).value();
+        const loserUser  = db.get('users').find({ username: loserName }).value();
 
         winnerUser.games += 1;
         winnerUser.wins += 1;
         loserUser.games += 1;
         loserUser.losses += 1;
 
-        await db.write();
-      } 
-      else if (isDraw(game.board)) {
+        db.write(); // Save changes
+      } else if (isDraw(game.board)) {
         gameOver = true;
-        // Everyone gets a "game played" increment
-        const user1Name = activeUsers[game.player1];
-        const user2Name = activeUsers[game.player2];
-        const user1 = db.data.users.find(u => u.username === user1Name);
-        const user2 = db.data.users.find(u => u.username === user2Name);
+
+        // Both players get a game increment
+        const name1 = activeUsers[game.player1];
+        const name2 = activeUsers[game.player2];
+
+        const user1 = db.get('users').find({ username: name1 }).value();
+        const user2 = db.get('users').find({ username: name2 }).value();
+
         user1.games += 1;
         user2.games += 1;
-        await db.write();
+        db.write();
       }
 
-      // Emit board updates
+      // Send updated board to both players
       io.to(game.player1).emit('boardUpdate', {
         board: game.board,
         yourTurn: game.currentTurn === game.player1,
         gameOver,
-        winner: game.winner
+        winner
       });
       io.to(game.player2).emit('boardUpdate', {
         board: game.board,
         yourTurn: game.currentTurn === game.player2,
         gameOver,
-        winner: game.winner
+        winner
       });
 
-      // If game is over, remove from activeGames after a delay
+      // If over, remove game after a short delay
       if (gameOver) {
         setTimeout(() => {
           delete activeGames[gameId];
@@ -203,37 +188,35 @@ io.on('connection', (socket) => {
   });
 
   // Quit game
-  socket.on('quitGame', async ({ gameId }) => {
+  socket.on('quitGame', ({ gameId }) => {
     const game = activeGames[gameId];
     if (game) {
       const quitterId = socket.id;
       const opponentId = (quitterId === game.player1) ? game.player2 : game.player1;
 
-      // Award opponent the win
-      await initDB();
-      const quitterUsername = activeUsers[quitterId];
-      const opponentUsername = activeUsers[opponentId];
+      // Update stats => Opponent gets a win
+      const quitterName = activeUsers[quitterId];
+      const opponentName = activeUsers[opponentId];
 
-      const quitterUser  = db.data.users.find(u => u.username === quitterUsername);
-      const opponentUser = db.data.users.find(u => u.username === opponentUsername);
+      const quitterUser  = db.get('users').find({ username: quitterName }).value();
+      const opponentUser = db.get('users').find({ username: opponentName }).value();
 
       quitterUser.games += 1;
       quitterUser.losses += 1;
       opponentUser.games += 1;
       opponentUser.wins += 1;
-      await db.write();
+      db.write();
 
       // Notify players
       io.to(opponentId).emit('opponentQuit', {});
       io.to(quitterId).emit('youQuit', {});
 
-      // Remove game
       delete activeGames[gameId];
       io.emit('lobbyUpdate', getLobbyUsers());
     }
   });
 
-  // On disconnect, remove user
+  // Disconnect
   socket.on('disconnect', () => {
     delete activeUsers[socket.id];
     io.emit('lobbyUpdate', getLobbyUsers());
@@ -241,30 +224,25 @@ io.on('connection', (socket) => {
   });
 });
 
-// --- HELPER FUNCTIONS ---
-
+// Helper: Return array of users with status
 function getLobbyUsers() {
-  // figure out who is in a game
   const inGamePlayers = new Set();
-  for (const gId of Object.keys(activeGames)) {
-    const g = activeGames[gId];
-    inGamePlayers.add(g.player1);
-    inGamePlayers.add(g.player2);
-  }
-
-  // Return array of { socketId, username, status }
+  Object.values(activeGames).forEach((game) => {
+    inGamePlayers.add(game.player1);
+    inGamePlayers.add(game.player2);
+  });
   return Object.entries(activeUsers).map(([socketId, username]) => {
     const status = inGamePlayers.has(socketId) ? 'in-game' : 'available';
     return { socketId, username, status };
   });
 }
 
-// Check for winner
+// TicTacToe helpers
 function checkWinner(board) {
   const combos = [
-    [0,1,2], [3,4,5], [6,7,8],  // rows
-    [0,3,6], [1,4,7], [2,5,8],  // columns
-    [0,4,8], [2,4,6]            // diagonals
+    [0,1,2],[3,4,5],[6,7,8], // rows
+    [0,3,6],[1,4,7],[2,5,8], // cols
+    [0,4,8],[2,4,6]          // diagonals
   ];
   for (let [a,b,c] of combos) {
     if (board[a] && board[a] === board[b] && board[b] === board[c]) {
@@ -278,9 +256,8 @@ function isDraw(board) {
   return board.every(cell => cell !== null);
 }
 
-// Start server
+// Start the server
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, async () => {
-  await initDB();
+server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
